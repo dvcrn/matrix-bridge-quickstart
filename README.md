@@ -17,6 +17,15 @@ It's designed to be a starting point, handling the basic boilerplate of setting 
     *   This struct implements the `bridgev2.NetworkConnector` interface from mautrix-go.
     *   **This is the primary file you need to modify.** It contains placeholder implementations for methods like `Start`, `Stop`, `GetName`, `GetCapabilities`, `CreateLogin`, `LoadUserLogin`, etc.
     *   You will implement the logic here to connect to your specific network, handle authentication, manage users, and translate messages between Matrix and the remote network.
+    *   **Login Flow:**
+        *   Implements a basic username/password login (`GetLoginFlows`, `CreateLogin`, `SimpleLogin` struct).
+        *   The `SimpleLogin.Start` method prompts the user for a username and password via the Matrix client.
+        *   The `SimpleLogin.SubmitUserInput` method receives the input.
+        *   **Important:** This implementation does **not** validate the password against any real network. It's a placeholder.
+        *   It generates a stable, unique internal ID (`networkid.UserLoginID`) for the remote user based on the provided username using a SHA1 UUID hash with a fixed namespace. This ensures the same username always maps to the same internal ID.
+        *   It calls `user.NewLogin` (where `user` is the `bridgev2.User` representing the Matrix user performing the login).
+        *   `user.NewLogin` creates and saves a `database.UserLogin` record in the bridge's database (`simple-bridge.db` by default, configured in `config.yaml`). This record links the Matrix user (`UserMXID`) to the generated `UserLoginID`, storing the provided username as `RemoteName` and basic profile info.
+        *   Finally, it calls `LoadUserLogin` for the newly created login. In this simple connector, `LoadUserLogin` just logs that the user was loaded; in a real bridge, this is where you would establish the actual connection to the remote network for that user.
 
 *   **`config.yaml`**:
     *   The main configuration file for the bridge core and Matrix connection details (homeserver, database, permissions, etc.).

@@ -5,6 +5,7 @@ go 1.23.0
 toolchain go1.23.4
 
 require (
+	github.com/google/uuid v1.6.0
 	github.com/rs/zerolog v1.34.0
 	go.mau.fi/util v0.8.6
 	maunium.net/go/mautrix v0.23.2
