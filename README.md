@@ -19,17 +19,20 @@ Here's a breakdown of the key files:
     *   You usually **won't need to modify this** much initially.
 
 *   **`network_connector.go`**:
-    *   **⭐ This is the heart of your bridge logic! ⭐**
+    *   **⭐ This is the main implementation of the network side of the bridge! ⭐**
     *   Contains the `SimpleNetworkConnector` struct, which implements the `bridgev2.NetworkConnector` interface.
-    *   You'll fill in the methods here (`Start`, `Stop`, `GetName`, `GetCapabilities`, `CreateLogin`, `LoadUserLogin`, etc.) to:
-        *   Connect to your target network's API.
-        *   Handle authentication (logging users in).
-        *   Manage user identities and profiles.
-        *   Translate messages and events between Matrix and the remote network.
-    *   Includes a *basic, non-functional placeholder* for username/password login to demonstrate the flow.
+    *   This file defines the bridge's core properties (`GetName`, `GetCapabilities`), handles loading user sessions (`LoadUserLogin`), and initiates the login process (`GetLoginFlows`, `CreateLogin`).
+    *   It also contains the main logic for handling events *from* Matrix (`HandleMatrixMessage`, etc. - though these might be delegated).
 
-    *   **Placeholder Login Flow:** The `SimpleLogin` struct implements a basic username/password flow. It generates a unique ID from the username and saves the login details (linking Matrix user to remote user) in the bridge database (`database.UserLogin`). 
+*   **`login.go`**:
+    *   Contains the logic for specific login flows (e.g., `SimpleLogin` for username/password).
+    *   Implements `bridgev2.LoginProcess` interfaces to handle steps like asking for user input (`Start`, `SubmitUserInput`) and finalizing login.
 
+*   **`network_client.go`** (Optional but Recommended):
+    *   This file typically holds the client logic for interacting with the *remote network* for a *specific logged-in user*.
+    *   You'd create a struct (e.g., `SimpleNetworkClient`) that implements `bridgev2.NetworkClient`.
+    *   Methods here would handle sending messages *to* the remote network, fetching user/room info, handling typing notifications, etc., based on Matrix events forwarded from `network_connector.go`.
+    *   The `LoadUserLogin` method in `network_connector.go` would instantiate this client.
 
 ---
 

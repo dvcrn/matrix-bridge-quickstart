@@ -3,25 +3,22 @@ package main
 import (
 	"context"
 	"fmt"
-	"strings"
+	"math/rand"
+	"time"
 
-	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 	"go.mau.fi/util/configupgrade"
+	"go.mau.fi/util/ptr"
+	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/database"
 	"maunium.net/go/mautrix/bridgev2/networkid"
-	"maunium.net/go/mautrix/bridgev2/status"
-	// "maunium.net/go/mautrix/bridgev2/database" // Only needed if LoadUserLogin uses DB types
-	// "maunium.net/go/mautrix/bridgev2/networkid" // Only needed if methods use networkid types directly
+	"maunium.net/go/mautrix/event"
+	"maunium.net/go/mautrix/id"
 )
 
-// Login Flow/Step IDs
-const (
-	LoginFlowIDUsernamePassword = "user-pass"
-	LoginStepIDUsernamePassword = "user-pass-input"
-	LoginStepIDComplete         = "complete"
-)
+// Ensure SimpleNetworkConnector implements NetworkConnector
+var _ bridgev2.NetworkConnector = (*SimpleNetworkConnector)(nil)
 
 // SimpleNetworkConnector implements the NetworkConnector interface
 type SimpleNetworkConnector struct {
@@ -40,6 +37,7 @@ func NewSimpleNetworkConnector(log zerolog.Logger) *SimpleNetworkConnector {
 // This method might be called by the bridge core even if not strictly in the interface.
 func (c *SimpleNetworkConnector) Init(br *bridgev2.Bridge) {
 	c.bridge = br
+	c.log = c.bridge.Log
 	c.log.Info().Msg("SimpleNetworkConnector Init called")
 }
 
@@ -65,7 +63,11 @@ func (c *SimpleNetworkConnector) GetNetworkID() string {
 // GetCapabilities implements bridgev2.NetworkConnector
 // This returns NetworkGeneralCapabilities as required by the interface.
 func (c *SimpleNetworkConnector) GetCapabilities() *bridgev2.NetworkGeneralCapabilities {
-	return &bridgev2.NetworkGeneralCapabilities{} // Empty capabilities for now
+	// Return general capabilities for the connector itself (not room-specific)
+	return &bridgev2.NetworkGeneralCapabilities{
+		// DisappearingMessages: false, // Set if supported
+		// AggressiveUpdateInfo: false, // Set if needed
+	}
 }
 
 // GetDBMetaTypes implements bridgev2.NetworkConnector
@@ -91,118 +93,15 @@ func (c *SimpleNetworkConnector) CreateLogin(ctx context.Context, user *bridgev2
 	if flowID != LoginFlowIDUsernamePassword {
 		return nil, fmt.Errorf("unsupported login flow ID: %s", flowID)
 	}
+	// Now returns SimpleLogin defined in login.go
 	return &SimpleLogin{
 		User: user,
-		Main: c,
+		Main: c, // Pass the connector instance
 		Log:  user.Log.With().Str("action", "login").Str("flow", flowID).Logger(),
 	}, nil
 }
 
-// SimpleLogin represents an ongoing username/password login attempt.
-type SimpleLogin struct {
-	User *bridgev2.User
-	Main *SimpleNetworkConnector
-	Log  zerolog.Logger
-}
-
-// Ensure SimpleLogin implements the required interface
-var _ bridgev2.LoginProcessUserInput = (*SimpleLogin)(nil)
-
-// Start implements bridgev2.LoginProcessUserInput
-func (sl *SimpleLogin) Start(ctx context.Context) (*bridgev2.LoginStep, error) {
-	sl.Log.Debug().Msg("Starting username/password login flow")
-	return &bridgev2.LoginStep{
-		Type:         bridgev2.LoginStepTypeUserInput,
-		StepID:       LoginStepIDUsernamePassword,
-		Instructions: "Enter your username and password for the 'Simple Network'.",
-		UserInputParams: &bridgev2.LoginUserInputParams{
-			Fields: []bridgev2.LoginInputDataField{
-				{
-					Type: bridgev2.LoginInputFieldTypeUsername, // Correct type based on login.go
-					ID:   "username",
-					Name: "Username",
-				},
-				{
-					Type: bridgev2.LoginInputFieldTypePassword, // Correct type based on login.go
-					ID:   "password",
-					Name: "Password",
-				},
-			},
-		},
-	}, nil
-}
-
-// SubmitUserInput implements bridgev2.LoginProcessUserInput
-func (sl *SimpleLogin) SubmitUserInput(ctx context.Context, input map[string]string) (*bridgev2.LoginStep, error) {
-	username := input["username"]
-	password := input["password"] // We don't actually use the password here
-	_ = password                  // Explicitly ignore unused variable
-
-	if username == "" {
-		return nil, fmt.Errorf("username cannot be empty") // Basic validation example
-	}
-
-	sl.Log.Info().Str("username", username).Msg("Received login credentials (no actual validation performed)")
-
-	// In a real bridge, you would authenticate with the remote network here.
-	// Since this is simple, we just generate a unique ID based on the username.
-	// We need a stable way to generate the LoginID for a given remote identifier (username).
-	// Using a UUID based on a namespace and the username ensures this.
-	// IMPORTANT: Do NOT just use the raw username, as it might contain invalid characters for a Matrix Localpart.
-	// Also, avoid collisions if usernames are not unique across different contexts (not an issue here).
-
-	// Use a fixed UUID namespace for this bridge type
-	namespace := uuid.MustParse("f7a4f3e3-5d5a-4a9e-8d8a-3b0b9e8a1b2c") // Example namespace UUID
-	loginIDStr := uuid.NewSHA1(namespace, []byte(strings.ToLower(username))).String()
-	// Correct type is networkid.UserLoginID
-	var loginID networkid.UserLoginID = networkid.UserLoginID(loginIDStr)
-
-	// Create the UserLogin entry in the bridge database
-	ul, err := sl.User.NewLogin(ctx, &database.UserLogin{
-		ID:         loginID,
-		RemoteName: username, // Use the provided username as the display name
-		RemoteProfile: status.RemoteProfile{
-			Name: username,
-			// Add other profile fields if known (e.g., avatar URL)
-		},
-		// Metadata: &YourUserLoginMetadata{ ... }, // Add if you have custom metadata
-	}, &bridgev2.NewLoginParams{
-		DeleteOnConflict: false, // Or true if you want relogins to replace old ones
-	})
-	if err != nil {
-		sl.Log.Err(err).Msg("Failed to create user login entry")
-		return nil, fmt.Errorf("failed to create user login: %w", err)
-	}
-
-	sl.Log.Info().Str("login_id", string(ul.ID)).Msg("Successfully 'logged in' and created user login")
-
-	// Load the user login into memory (important!)
-	// In a real bridge, this would trigger connecting to the remote network for this user.
-	err = sl.Main.LoadUserLogin(ctx, ul)
-	if err != nil {
-		// Log the error, but maybe still return success to the user? Depends on desired UX.
-		sl.Log.Err(err).Msg("Failed to load user login after creation (this might indicate an issue)")
-		// Optionally delete the login record if loading failed critically:
-		// sl.User.DeleteLogin(ctx, ul.ID)
-		// return nil, fmt.Errorf("failed to activate user login: %w", err)
-	}
-
-	return &bridgev2.LoginStep{
-		Type:         bridgev2.LoginStepTypeComplete,
-		StepID:       LoginStepIDComplete,
-		Instructions: fmt.Sprintf("Successfully logged in as '%s'", username),
-		CompleteParams: &bridgev2.LoginCompleteParams{
-			UserLoginID: ul.ID,
-			UserLogin:   ul, // Pass the loaded UserLogin back
-		},
-	}, nil
-}
-
-// Cancel implements bridgev2.LoginProcessUserInput
-func (sl *SimpleLogin) Cancel() {
-	sl.Log.Debug().Msg("Login process cancelled")
-	// Add any cleanup logic here if needed (e.g., aborting network connections)
-}
+// SimpleLogin struct and methods removed - now in login.go
 
 // --- End Login Flow Implementation ---
 
@@ -236,17 +135,260 @@ func (c *SimpleNetworkConnector) Stop(ctx context.Context) error {
 // LoadUserLogin implements bridgev2.NetworkConnector
 // Note: Receives *bridgev2.UserLogin which wraps *database.UserLogin
 func (c *SimpleNetworkConnector) LoadUserLogin(ctx context.Context, login *bridgev2.UserLogin) error {
-	// In a real bridge, this is where you would establish a connection to the
-	// remote network for the specific user 'login'.
-	// You'd store the connection object/client within the login.Client field
-	// or manage it separately mapped by login.ID.
-	c.log.Info().Str("user_id", string(login.ID)).Str("remote_name", login.RemoteName).Msg("LoadUserLogin called")
+	c.log.Info().
+		Str("user_id", string(login.ID)).
+		Str("remote_name", login.RemoteName).
+		Str("mxid", string(login.User.MXID)).
+		Msg("LoadUserLogin called")
 
-	// Example: Storing a dummy client object
-	// login.Client = &YourNetworkClient{ ... connection details ... }
+	// Create a new SimpleNetworkClient for this login
+	client := &SimpleNetworkClient{
+		log:       c.log.With().Str("user_id", string(login.ID)).Logger(),
+		bridge:    c.bridge,
+		login:     login,
+		connector: c,
+	}
 
-	// Note: SetRemoteStatus doesn't exist on User or UserLogin.
-	// Status is typically managed via login.BridgeState.Set(...) in a real bridge.
+	// Store the client in the login object
+	login.Client = client
+
+	c.log.Info().
+		Str("user_id", string(login.ID)).
+		Str("remote_name", login.RemoteName).
+		Interface("client_type", client).
+		Msg("Created and stored SimpleNetworkClient")
+
+	// Run welcome logic *after* the login is fully established and loaded
+	go c.createWelcomeRoomAndSendIntro(login)
 
 	return nil
+}
+
+// createWelcomeRoomAndSendIntro performs the room creation and ghost interaction logic.
+func (c *SimpleNetworkConnector) createWelcomeRoomAndSendIntro(login *bridgev2.UserLogin) {
+	ctx := context.Background() // Use a background context for this async task
+	user := login.User          // Get the User object
+	log := c.log.With().Str("user_mxid", string(user.MXID)).Str("login_id", string(login.ID)).Logger()
+	ctx = log.WithContext(ctx) // Add logger to context for subsequent calls
+
+	// Seed random number generator for greetings
+	// Note: Better to seed once at startup, but fine for this example
+	rand.Seed(time.Now().UnixNano())
+
+	log.Info().Msg("Starting welcome room creation process")
+
+	portalId := networkid.PortalID("some-remote-id")
+	portalKey := networkid.PortalKey{
+		ID: portalId,
+	}
+
+	portal, err := c.bridge.GetPortalByKey(ctx, portalKey)
+	if err != nil {
+		log.Err(err).Str("portal_key", string(portalKey.ID)).Msg("Failed to get portal")
+		return
+	}
+
+	log.Info().Str("portal_id", string(portal.ID)).Msg("Successfully retrieved portal")
+
+	// 1. Define Ghost details
+	ghostNetworkUserID := networkid.UserID(fmt.Sprintf("%s_ghosty_ghost", c.GetNetworkID()))
+	ghostDisplayName := "Ghosty Ghost"
+
+	ghost, err := c.bridge.GetGhostByID(ctx, ghostNetworkUserID)
+	if err != nil {
+		log.Err(err).Str("ghost_network_user_id", string(ghostNetworkUserID)).Msg("Failed to get ghost")
+		return
+	}
+
+	// Update ghost info if needed
+	ghostInfo := &bridgev2.UserInfo{
+		Name: &ghostDisplayName,
+		// Add other fields as needed - e.g., avatar
+	}
+	// Use UpdateInfo to update the profile
+	ghost.UpdateInfo(ctx, ghostInfo)
+
+	log = log.With().Str("ghost_mxid", string(ghost.ID)).Logger() // MXID field should exist
+	log.Info().Msg("Successfully retrieved/provisioned ghost")
+
+	// 2. Create the room
+	roomAliasName := fmt.Sprintf("welcome-%s-%d", login.RemoteName, time.Now().UnixNano()) // Unique alias attempt
+
+	// Determine if auto-join via initial_members is likely available
+	// You might want to make this check more robust based on MatrixConnector capabilities
+	autoJoin := c.bridge.Matrix.GetCapabilities().AutoJoinInvites
+	inviteList := []id.UserID{user.MXID} // Always invite the user
+
+	createReq := &mautrix.ReqCreateRoom{
+		Visibility:      "private",
+		Preset:          "private_chat",
+		Name:            fmt.Sprintf("Welcome %s!", login.RemoteName),
+		Topic:           "Your special welcome room.",
+		Invite:          inviteList,
+		IsDirect:        false, // Not a DM (usually management rooms are DM, welcome might not be)
+		CreationContent: map[string]interface{}{},
+		InitialState:    []*event.Event{},
+		RoomAliasName:   roomAliasName, // Local part of the alias
+	}
+
+	// If auto-join seems available, use initial_members
+	if autoJoin {
+		// TODO: Use BeeperInitialMembers when available/needed
+		// createReq.BeeperInitialMembers = []id.UserID{user.MXID}
+		// createReq.BeeperAutoJoinInvites = true // May still be needed depending on homeserver
+		log.Info().Msg("Attempting room creation with auto-join flags")
+	} else {
+		log.Info().Msg("Auto-join flags not set, will attempt join via double puppet if available")
+	}
+
+	resp, err := c.bridge.Bot.CreateRoom(ctx, createReq)
+	if err != nil {
+		log.Err(err).Msg("Failed to create welcome room")
+		return
+	}
+	roomID := resp
+	log = log.With().Str("room_id", string(roomID)).Logger()
+	log.Info().Msg("Successfully created welcome room")
+
+	doublePuppet := user.DoublePuppet(ctx) // Get the double puppet intent
+	// 3. Attempt to join the room using Double Puppet if auto-join didn't handle it
+	if autoJoin {
+		if doublePuppet != nil {
+			log.Info().Msg("Attempting to join welcome room using double puppet intent")
+			err = doublePuppet.EnsureJoined(ctx, roomID)
+			if err != nil {
+				// Log the error, but continue - the user might join manually
+				log.Err(err).Msg("Failed to join welcome room using double puppet intent (user might need to accept invite)")
+			} else {
+				log.Info().Msg("Successfully joined welcome room using double puppet intent")
+			}
+		} else {
+			log.Warn().Msg("Double puppet intent not available, user will need to manually accept invite")
+		}
+	} else {
+		log.Info().Msg("Skipping explicit join, assuming auto-join worked")
+	}
+
+	err = portal.CreateMatrixRoom(ctx, user.GetDefaultLogin(), &bridgev2.ChatInfo{
+		Name:  ptr.Ptr(fmt.Sprintf("Welcome %s again!", login.RemoteName)),
+		Topic: ptr.Ptr("Your special welcome room."),
+		Members: &bridgev2.ChatMemberList{Members: []bridgev2.ChatMember{
+			{
+				EventSender: bridgev2.EventSender{
+					Sender:      networkid.UserID(user.MXID),
+					SenderLogin: networkid.UserLoginID(user.GetDefaultLogin().ID),
+				},
+				Membership: event.MembershipJoin,
+				Nickname:   ptr.Ptr(login.RemoteName),
+				PowerLevel: ptr.Ptr(100),
+				UserInfo: &bridgev2.UserInfo{
+					Name: ptr.Ptr(login.RemoteName),
+				},
+			},
+		}},
+	})
+	if err != nil {
+		log.Err(err).Msg("Failed to create matrix room")
+		return
+	}
+	log.Info().Msg("Successfully created matrix room")
+
+	// 4. Invite the Ghost (Ghost's MXID) using the Bot's Intent API
+	// Ensure the ghost isn't already invited/joined if createReq didn't handle it
+	// (Not strictly necessary here as ghost isn't in initial invite list)
+	// _, err = c.bridge.Bot.InviteUser(ctx, roomID, &mautrix.ReqInviteUser{UserID: ghost.MXID})
+	// if err != nil {
+	// 	// Don't fail the whole process, maybe ghost was already there? Log and continue.
+	// 	log.Err(err).Msg("Failed to invite ghost to welcome room (continuing)")
+	// } else {
+	// 	log.Info().Msg("Invited ghost to welcome room")
+	// }
+	// Optional: Make the ghost auto-accept if needed via ghost.EnsureJoined(ctx, roomID)
+
+	// 5. Send Message from Ghost using the Ghost's Intent API
+	greetings := []string{"Hello there!", "Welcome!", "Greetings!", "Hi!", "Hey!"}
+	randomGreeting := greetings[rand.Intn(len(greetings))]
+	messageContent := &event.MessageEventContent{
+		MsgType: event.MsgText,
+		Body:    fmt.Sprintf("%s I'm %s, your friendly welcome bot for the %s bridge.", randomGreeting, ghostDisplayName, c.GetName().DisplayName),
+	}
+
+	// Wrap the specific content type in the general event.Content struct
+	content := &event.Content{Parsed: messageContent}
+
+	// Ensure ghost is joined before sending message
+	err = ghost.Intent.EnsureJoined(ctx, roomID)
+	if err != nil {
+		log.Err(err).Msg("Failed to ensure ghost was joined before sending message")
+		// Decide if you should return or try sending anyway
+		// return
+	}
+
+	_, err = ghost.Intent.SendMessage(ctx, roomID, event.EventMessage, content, nil) // Pass wrapped content
+	if err != nil {
+		log.Err(err).Msg("Failed to send welcome message from ghost")
+		return
+	}
+	log.Info().Msg("Successfully sent welcome message from ghost")
+}
+
+// HandleMatrixMessage implements NetworkAPI
+func (c *SimpleNetworkConnector) HandleMatrixMessage(ctx context.Context, msg *bridgev2.MatrixMessage) (*bridgev2.MatrixMessageResponse, error) {
+	log := c.log.With().
+		Str("portal_id", string(msg.Portal.ID)).
+		Str("sender_mxid", string(msg.Event.Sender)).
+		Str("event_id", string(msg.Event.ID)).
+		Logger()
+	ctx = log.WithContext(ctx)
+
+	log.Info().Msg("HandleMatrixMessage called")
+
+	// try to get the user
+	_, err := c.bridge.GetExistingUserByMXID(ctx, msg.Event.Sender)
+	if err != nil {
+		log.Err(err).Str("user_mxid", string(msg.Event.Sender)).Msg("Failed to get user object, ignoring message")
+		// ignoring this because we only reply to user messages
+		return nil, nil
+	}
+
+	// Get the Network User ID for the ghost
+	ghostNetworkUserID := networkid.UserID(fmt.Sprintf("%s_ghosty_ghost", c.GetNetworkID()))
+
+	// Calculate the expected Matrix User ID for the ghost
+	ghost, err := c.bridge.GetExistingGhostByID(ctx, ghostNetworkUserID)
+	if err != nil {
+		log.Err(err).Str("ghost_network_user_id", string(ghostNetworkUserID)).Msg("Failed to get ghost object to reply, ignoring message")
+		return nil, err
+	}
+
+	// Prepare the reply message
+	replyContent := &event.MessageEventContent{
+		MsgType: event.MsgText,
+		Body:    "OK",
+	}
+	content := &event.Content{Parsed: replyContent}
+
+	// Use Portal.MXID which should be the id.RoomID for the portal
+	roomID := msg.Portal.MXID
+	err = ghost.Intent.EnsureJoined(ctx, roomID)
+	if err != nil {
+		log.Err(err).Msg("Failed to ensure ghost was joined before replying")
+		// Decide if you should return error or try sending anyway
+		// For this simple case, we'll try sending anyway.
+	}
+
+	// Use roomID obtained from Portal.MXID
+	respSendEvent, err := ghost.Intent.SendMessage(ctx, roomID, event.EventMessage, content, nil)
+	if err != nil {
+		log.Err(err).Msg("Failed to send reply message from ghost")
+		// Return the error so the bridge core knows the handler failed
+		return nil, fmt.Errorf("failed to send ghost reply: %w", err)
+	}
+
+	log.Info().Str("reply_event_id", string(respSendEvent.EventID)).Msg("Successfully sent reply message from ghost")
+	log.Info().Str("reply_event_id", string(respSendEvent.EventID)).Msg("Successfully sent reply message from ghost") // Extract EventID
+
+	// Return nil, nil as we don't need to store a corresponding remote message
+	// A real bridge might return a database.Message representing the "OK" confirmation.
+	return &bridgev2.MatrixMessageResponse{}, nil
 }
