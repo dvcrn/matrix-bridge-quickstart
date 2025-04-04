@@ -9,12 +9,10 @@ import (
 	"github.com/rs/zerolog"
 	"go.mau.fi/util/configupgrade"
 	"go.mau.fi/util/ptr"
-	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/database"
 	"maunium.net/go/mautrix/bridgev2/networkid"
 	"maunium.net/go/mautrix/event"
-	"maunium.net/go/mautrix/id"
 )
 
 // Ensure SimpleNetworkConnector implements NetworkConnector
@@ -172,12 +170,11 @@ func (c *SimpleNetworkConnector) createWelcomeRoomAndSendIntro(login *bridgev2.U
 	ctx = log.WithContext(ctx) // Add logger to context for subsequent calls
 
 	// Seed random number generator for greetings
-	// Note: Better to seed once at startup, but fine for this example
 	rand.Seed(time.Now().UnixNano())
 
 	log.Info().Msg("Starting welcome room creation process")
 
-	portalId := networkid.PortalID("some-remote-id")
+	portalId := networkid.PortalID("welcome-room")
 	portalKey := networkid.PortalKey{
 		ID: portalId,
 	}
@@ -190,7 +187,7 @@ func (c *SimpleNetworkConnector) createWelcomeRoomAndSendIntro(login *bridgev2.U
 
 	log.Info().Str("portal_id", string(portal.ID)).Msg("Successfully retrieved portal")
 
-	// 1. Define Ghost details
+	// Define Ghost details
 	ghostNetworkUserID := networkid.UserID(fmt.Sprintf("%s_ghosty_ghost", c.GetNetworkID()))
 	ghostDisplayName := "Ghosty Ghost"
 
@@ -203,74 +200,15 @@ func (c *SimpleNetworkConnector) createWelcomeRoomAndSendIntro(login *bridgev2.U
 	// Update ghost info if needed
 	ghostInfo := &bridgev2.UserInfo{
 		Name: &ghostDisplayName,
-		// Add other fields as needed - e.g., avatar
 	}
-	// Use UpdateInfo to update the profile
 	ghost.UpdateInfo(ctx, ghostInfo)
 
-	log = log.With().Str("ghost_mxid", string(ghost.ID)).Logger() // MXID field should exist
+	log = log.With().Str("ghost_mxid", string(ghost.ID)).Logger()
 	log.Info().Msg("Successfully retrieved/provisioned ghost")
 
-	// 2. Create the room
-	roomAliasName := fmt.Sprintf("welcome-%s-%d", login.RemoteName, time.Now().UnixNano()) // Unique alias attempt
-
-	// Determine if auto-join via initial_members is likely available
-	// You might want to make this check more robust based on MatrixConnector capabilities
-	autoJoin := c.bridge.Matrix.GetCapabilities().AutoJoinInvites
-	inviteList := []id.UserID{user.MXID} // Always invite the user
-
-	createReq := &mautrix.ReqCreateRoom{
-		Visibility:      "private",
-		Preset:          "private_chat",
-		Name:            fmt.Sprintf("Welcome %s!", login.RemoteName),
-		Topic:           "Your special welcome room.",
-		Invite:          inviteList,
-		IsDirect:        false, // Not a DM (usually management rooms are DM, welcome might not be)
-		CreationContent: map[string]interface{}{},
-		InitialState:    []*event.Event{},
-		RoomAliasName:   roomAliasName, // Local part of the alias
-	}
-
-	// If auto-join seems available, use initial_members
-	if autoJoin {
-		// TODO: Use BeeperInitialMembers when available/needed
-		// createReq.BeeperInitialMembers = []id.UserID{user.MXID}
-		// createReq.BeeperAutoJoinInvites = true // May still be needed depending on homeserver
-		log.Info().Msg("Attempting room creation with auto-join flags")
-	} else {
-		log.Info().Msg("Auto-join flags not set, will attempt join via double puppet if available")
-	}
-
-	resp, err := c.bridge.Bot.CreateRoom(ctx, createReq)
-	if err != nil {
-		log.Err(err).Msg("Failed to create welcome room")
-		return
-	}
-	roomID := resp
-	log = log.With().Str("room_id", string(roomID)).Logger()
-	log.Info().Msg("Successfully created welcome room")
-
-	doublePuppet := user.DoublePuppet(ctx) // Get the double puppet intent
-	// 3. Attempt to join the room using Double Puppet if auto-join didn't handle it
-	if autoJoin {
-		if doublePuppet != nil {
-			log.Info().Msg("Attempting to join welcome room using double puppet intent")
-			err = doublePuppet.EnsureJoined(ctx, roomID)
-			if err != nil {
-				// Log the error, but continue - the user might join manually
-				log.Err(err).Msg("Failed to join welcome room using double puppet intent (user might need to accept invite)")
-			} else {
-				log.Info().Msg("Successfully joined welcome room using double puppet intent")
-			}
-		} else {
-			log.Warn().Msg("Double puppet intent not available, user will need to manually accept invite")
-		}
-	} else {
-		log.Info().Msg("Skipping explicit join, assuming auto-join worked")
-	}
-
+	// Create the room using portal
 	err = portal.CreateMatrixRoom(ctx, user.GetDefaultLogin(), &bridgev2.ChatInfo{
-		Name:  ptr.Ptr(fmt.Sprintf("Welcome %s again!", login.RemoteName)),
+		Name:  ptr.Ptr(fmt.Sprintf("Welcome %s!", login.RemoteName)),
 		Topic: ptr.Ptr("Your special welcome room."),
 		Members: &bridgev2.ChatMemberList{Members: []bridgev2.ChatMember{
 			{
@@ -293,19 +231,14 @@ func (c *SimpleNetworkConnector) createWelcomeRoomAndSendIntro(login *bridgev2.U
 	}
 	log.Info().Msg("Successfully created matrix room")
 
-	// 4. Invite the Ghost (Ghost's MXID) using the Bot's Intent API
-	// Ensure the ghost isn't already invited/joined if createReq didn't handle it
-	// (Not strictly necessary here as ghost isn't in initial invite list)
-	// _, err = c.bridge.Bot.InviteUser(ctx, roomID, &mautrix.ReqInviteUser{UserID: ghost.MXID})
-	// if err != nil {
-	// 	// Don't fail the whole process, maybe ghost was already there? Log and continue.
-	// 	log.Err(err).Msg("Failed to invite ghost to welcome room (continuing)")
-	// } else {
-	// 	log.Info().Msg("Invited ghost to welcome room")
-	// }
-	// Optional: Make the ghost auto-accept if needed via ghost.EnsureJoined(ctx, roomID)
+	// Ensure ghost is joined before sending message
+	err = ghost.Intent.EnsureJoined(ctx, portal.MXID)
+	if err != nil {
+		log.Err(err).Msg("Failed to ensure ghost was joined before sending message")
+		return
+	}
 
-	// 5. Send Message from Ghost using the Ghost's Intent API
+	// Send welcome message from ghost
 	greetings := []string{"Hello there!", "Welcome!", "Greetings!", "Hi!", "Hey!"}
 	randomGreeting := greetings[rand.Intn(len(greetings))]
 	messageContent := &event.MessageEventContent{
@@ -313,18 +246,9 @@ func (c *SimpleNetworkConnector) createWelcomeRoomAndSendIntro(login *bridgev2.U
 		Body:    fmt.Sprintf("%s I'm %s, your friendly welcome bot for the %s bridge.", randomGreeting, ghostDisplayName, c.GetName().DisplayName),
 	}
 
-	// Wrap the specific content type in the general event.Content struct
 	content := &event.Content{Parsed: messageContent}
 
-	// Ensure ghost is joined before sending message
-	err = ghost.Intent.EnsureJoined(ctx, roomID)
-	if err != nil {
-		log.Err(err).Msg("Failed to ensure ghost was joined before sending message")
-		// Decide if you should return or try sending anyway
-		// return
-	}
-
-	_, err = ghost.Intent.SendMessage(ctx, roomID, event.EventMessage, content, nil) // Pass wrapped content
+	_, err = ghost.Intent.SendMessage(ctx, portal.MXID, event.EventMessage, content, nil)
 	if err != nil {
 		log.Err(err).Msg("Failed to send welcome message from ghost")
 		return
