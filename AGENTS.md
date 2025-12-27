@@ -2,9 +2,9 @@
 
 ## Project Structure & Module Organization
 - `main.go` is the entry point; it wires config, logging, and bridge lifecycle (`mxmain`).
-- `network_connector.go` implements the core `bridgev2.NetworkConnector` logic.
-- `login.go` defines login flows (`bridgev2.LoginProcess`).
-- `network_client.go` is the per-user remote network client.
+- `connector/my_connector.go` implements the core `bridgev2.NetworkConnector` logic.
+- `connector/login.go` defines login flows (`bridgev2.LoginProcess`).
+- `connector/network_client.go` is the per-user remote network client.
 - `go.mod`/`go.sum` manage dependencies; no dedicated `tests/` directory yet.
 
 ## Build, Test, and Development Commands
@@ -20,11 +20,19 @@
 - Keep new files in the repo root unless you add a new package.
 
 ## Bridge Build & Operation Guide
-- Implement the network side in `network_connector.go`: `GetName`, `GetCapabilities`, `GetLoginFlows`, `CreateLogin`, `LoadUserLogin`, `Start`, `Stop`.
+- Implement the network side in `connector/my_connector.go`: `GetName`, `GetCapabilities`, `GetLoginFlows`, `CreateLogin`, `LoadUserLogin`, `Start`, `Stop`.
 - If you need network-specific settings, add a config file (e.g., `simple-config.yaml`) and load it in `GetConfig()`.
 - Configure `config.yaml` with `homeserver.address`, `homeserver.domain`, database path, and permissions.
 - Copy `id`, `as_token`, `hs_token`, and bot settings from `registration.yaml` into `config.yaml`.
 - Place `registration.yaml` into your homeserver config directory and restart the homeserver.
+
+## BridgeV2 Lifecycle & Backfill Notes
+- `LoadUserLogin` should create your adapter, assign `userLogin.Client`, and avoid blocking network calls; connect in `NetworkAPI.Connect`.
+- Create new rooms by queuing `simplevent.ChatResync` with `EventMeta.CreatePortal = true` and `ChatInfo = nil`; the framework will call `GetChatInfo`.
+- `GetChatInfo` should return the full desired room state (name, topic, DM type, members, power levels, avatar).
+- Use `simplevent.ChatInfoChange` for state-only updates (e.g., lock rooms on unmatch).
+- Implement `FetchMessages` (via `BackfillingNetworkAPI`) to backfill history; lock portals, convert remote messages to `BackfillMessage`, and return `HasMore`.
+- Send bridge state updates with `userLogin.BridgeState.Send(status.BridgeState{StateEvent: ...})` for connect/backfill/errors.
 
 ## Portal Rooms vs Direct Rooms
 - **Direct Matrix rooms** (`c.bridge.Bot.CreateRoom`) are not routed through the bridge and will not trigger `HandleMatrixMessage`.

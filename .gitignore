@@ -1,0 +1,6 @@
+registration.yaml
+config.yaml
+*.db
+*.db-shm
+*.db-wal
+logs/
