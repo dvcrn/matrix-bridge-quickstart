@@ -18,8 +18,52 @@ func (nc *MyNetworkClient) FetchMessages(ctx context.Context, fetchParams bridge
 	portal := fetchParams.Portal
 	now := time.Now().UTC()
 
-	backfillMsg := &bridgev2.BackfillMessage{
-		ID:        networkid.MessageID("static-backfill-" + string(portal.ID)),
+	log := nc.log.With().
+		Str("portal_id", string(portal.ID)).
+		Str("portal_mxid", string(portal.MXID)).
+		Bool("forward", fetchParams.Forward).
+		Logger()
+	ctx = log.WithContext(ctx)
+	log.Info().Msg("FetchMessages called")
+
+	backfillMsg1 := &bridgev2.BackfillMessage{
+		ID:        networkid.MessageID("static-backfill-1-" + string(portal.ID)),
+		Timestamp: now.Add(-3 * time.Minute),
+		Sender: bridgev2.EventSender{
+			Sender:   networkid.UserID("example-ghost"),
+			IsFromMe: false,
+		},
+		ConvertedMessage: &bridgev2.ConvertedMessage{
+			Parts: []*bridgev2.ConvertedMessagePart{{
+				Type: event.EventMessage,
+				Content: &event.MessageEventContent{
+					MsgType: event.MsgText,
+					Body:    "Backfilled history (placeholder) #1.",
+				},
+			}},
+		},
+	}
+
+	backfillMsg2 := &bridgev2.BackfillMessage{
+		ID:        networkid.MessageID("static-backfill-2-" + string(portal.ID)),
+		Timestamp: now.Add(-2 * time.Minute),
+		Sender: bridgev2.EventSender{
+			Sender:   networkid.UserID("example-ghost"),
+			IsFromMe: false,
+		},
+		ConvertedMessage: &bridgev2.ConvertedMessage{
+			Parts: []*bridgev2.ConvertedMessagePart{{
+				Type: event.EventMessage,
+				Content: &event.MessageEventContent{
+					MsgType: event.MsgText,
+					Body:    "Backfilled history (placeholder) #2.",
+				},
+			}},
+		},
+	}
+
+	backfillMsg3 := &bridgev2.BackfillMessage{
+		ID:        networkid.MessageID("static-backfill-3-" + string(portal.ID)),
 		Timestamp: now.Add(-1 * time.Minute),
 		Sender: bridgev2.EventSender{
 			Sender:   networkid.UserID("example-ghost"),
@@ -30,14 +74,14 @@ func (nc *MyNetworkClient) FetchMessages(ctx context.Context, fetchParams bridge
 				Type: event.EventMessage,
 				Content: &event.MessageEventContent{
 					MsgType: event.MsgText,
-					Body:    "Backfilled history (placeholder).",
+					Body:    "Backfilled history (placeholder) #3.",
 				},
 			}},
 		},
 	}
 
 	return &bridgev2.FetchMessagesResponse{
-		Messages:                []*bridgev2.BackfillMessage{backfillMsg},
+		Messages:                []*bridgev2.BackfillMessage{backfillMsg1, backfillMsg2, backfillMsg3},
 		HasMore:                 false,
 		Forward:                 fetchParams.Forward,
 		MarkRead:                !fetchParams.Forward,
