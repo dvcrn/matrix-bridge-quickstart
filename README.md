@@ -83,7 +83,7 @@ Follow these steps to get your basic bridge running:
 8.  **Run the Bridge:**
     - Execute the binary, pointing it to your config files:
       ```bash
-      ./minibridge -c config.yaml -r registration.yaml
+      go run . -c config.yaml -r registration.yaml
       ```
     - Check the terminal output for logs and potential errors.
 
@@ -104,6 +104,57 @@ go run . --generate-example-config -c config.yaml
 🎉 **Congratulations!** You have a running (though perhaps very basic) Matrix bridge.
 
 ---
+
+## 🧩 Common Bridge Patterns
+
+### 1) How do I create rooms from remote rooms?
+
+Use the portal + `simplevent.ChatResync` flow. When you discover a new remote chat, create or load the portal, store metadata, then queue a resync with `CreatePortal = true`. The framework will call `GetChatInfo` to build the room state and create the Matrix room. Suggested locations: `connector/handle_remote.go` (queue helper) and `connector/handle_matrix.go` (`GetChatInfo`).
+
+```go
+portalKey := networkid.PortalKey{ID: networkid.PortalID(remoteRoomID)}
+portal, _ := bridge.GetPortalByKey(ctx, portalKey)
+portal.OtherUserID = networkid.UserID(remoteUserID)
+_ = portal.Update(ctx)
+
+bridge.QueueRemoteEvent(login, &simplevent.ChatResync{
+	EventMeta: simplevent.EventMeta{
+		Type:         bridgev2.RemoteEventChatResync,
+		PortalKey:    portalKey,
+		CreatePortal: true,
+	},
+	ChatInfo: nil, // GetChatInfo will be called by the framework
+})
+```
+
+### 2) How do I send a message into a Matrix room?
+
+Queue a `simplevent.Message` (remote → Matrix). The framework converts and inserts it. See `connector/handle_remote.go` (`QueueRemoteMessage`).
+
+```go
+nc.QueueRemoteMessage(ctx, msg.Portal.ID, "Hi there too")
+```
+
+### 3) How do I backfill messages?
+
+Implement `FetchMessages` (BackfillingNetworkAPI). When backfill is enabled, the framework will call it and insert the returned messages. See `connector/network_client_backfill.go`.
+
+```go
+func (nc *MyNetworkClient) FetchMessages(ctx context.Context, p bridgev2.FetchMessagesParams) (*bridgev2.FetchMessagesResponse, error) {
+	// build []*bridgev2.BackfillMessage and return
+}
+```
+
+### 4) How do I react on a Matrix message?
+
+Implement `HandleMatrixMessage` and take action for Matrix → remote, or queue a remote reply. See `connector/handle_matrix.go`.
+
+```go
+func (nc *MyNetworkClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.MatrixMessage) (*bridgev2.MatrixMessageResponse, error) {
+	nc.QueueRemoteMessage(ctx, msg.Portal.ID, "Hi there too")
+	return &bridgev2.MatrixMessageResponse{}, nil
+}
+```
 
 ## ⏭️ Next Steps
 
