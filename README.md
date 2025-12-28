@@ -109,7 +109,7 @@ go run . --generate-example-config -c config.yaml
 
 ### 1) How do I create rooms from remote rooms?
 
-Use the portal + `simplevent.ChatResync` flow. When you discover a new remote chat, create or load the portal, store metadata, then queue a resync with `CreatePortal = true`. The framework will call `GetChatInfo` to build the room state and create the Matrix room. Suggested locations: `connector/handle_remote.go` (queue helper) and `connector/handle_matrix.go` (`GetChatInfo`).
+Use the portal + `simplevent.ChatResync` flow. When you discover a new remote chat, create or load the portal, store metadata, then queue a resync with `CreatePortal = true`. The framework will call `GetChatInfo` to build the room state and create the Matrix room. Suggested locations: `connector/handle_remote.go` (queue helper), `connector/handle_matrix.go` (`GetChatInfo`), and `connector/types.go` (portal metadata).
 
 ```go
 portalKey := networkid.PortalKey{ID: networkid.PortalID(remoteRoomID)}

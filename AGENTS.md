@@ -5,6 +5,7 @@
 - `connector/my_connector.go` implements the core `bridgev2.NetworkConnector` logic.
 - `connector/login.go` defines login flows (`bridgev2.LoginProcess`).
 - `connector/network_client.go` is the per-user remote network client.
+- `connector/types.go` defines portal/ghost/login metadata stored in the bridge database.
 - `go.mod`/`go.sum` manage dependencies; no dedicated `tests/` directory yet.
 
 ## Build, Test, and Development Commands

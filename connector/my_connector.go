@@ -63,7 +63,17 @@ func (c *MyConnector) GetCapabilities() *bridgev2.NetworkGeneralCapabilities {
 
 // GetDBMetaTypes implements bridgev2.NetworkConnector.
 func (c *MyConnector) GetDBMetaTypes() database.MetaTypes {
-	return database.MetaTypes{}
+	return database.MetaTypes{
+		Portal: func() any {
+			return &PortalMetadata{}
+		},
+		Ghost: func() any {
+			return &GhostMetadata{}
+		},
+		UserLogin: func() any {
+			return &LoginMetadata{}
+		},
+	}
 }
 
 // GetLoginFlows implements bridgev2.NetworkConnector.
